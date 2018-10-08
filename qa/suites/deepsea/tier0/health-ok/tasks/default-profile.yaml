@@ -3,3 +3,4 @@ tasks:
     clients:
       client.salt_master:
         - deepsea/suites/health-ok/default-profile.sh
+- survive: 'touch a_file'
