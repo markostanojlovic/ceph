@@ -20,6 +20,14 @@ from util import (
     )
 
 log = logging.getLogger(__name__)
+ceph_cluster_status = """# Display ceph cluster status
+set -ex
+ceph pg stat -f json-pretty
+ceph health detail -f json-pretty
+ceph osd tree
+ceph osd pool ls detail -f json-pretty
+ceph -s
+"""
 cluster_roles = ['mon', 'mgr', 'osd', 'mds', 'rgw', 'igw', 'ganesha']
 global_conf = '/srv/salt/ceph/configuration/files/ceph.conf.d/global.conf'
 health_ok_cmd = "health-ok.sh --teuthology"
@@ -82,12 +90,17 @@ class DeepSeaDeploy(Task):
 #       self.log.debug("ctx.config {}".format(ctx.config))
         log.debug("Munged config is {}".format(self.config))
 
+    def _ceph_cluster_status(self):
+        write_file(self.master_remote, 'ceph_cluster_status.sh', ceph_cluster_status)
+        self.master_remote.run(args=[
+            "sudo", "bash", "ceph_cluster_status.sh"
+            ])
+
     def _ceph_conf_mon_allow_pool_delete(self):
         info_msg = (
             "deepsea_deploy: adjusted ceph.conf "
             "to allow pool deletes")
-        data = """mon allow pool delete = true
-"""
+        data = "mon allow pool delete = true\n"
         sudo_append_to_file(
             self.master_remote,
             global_conf,
@@ -99,8 +112,7 @@ class DeepSeaDeploy(Task):
         info_msg = (
             "deepsea_deploy: adjusted ceph.conf "
             "for deployment of dashboard MGR module")
-        data = """mgr initial modules = dashboard
-"""
+        data = "mgr initial modules = dashboard\n"
         sudo_append_to_file(
             self.master_remote,
             mon_conf,
@@ -118,14 +130,16 @@ class DeepSeaDeploy(Task):
             ).format(self.cluster_nodes)
         data = None
         if self.cluster_nodes == 1:
-            data = """mon pg warn min per osd = 16
-osd pool default size = 2
-osd crush chooseleaf type = 0 # failure domain == osd
-"""
+            data = (
+                   "mon pg warn min per osd = 16\n"
+                   "osd pool default size = 2\n"
+                   "osd crush chooseleaf type = 0 # failure domain == osd\n"
+                   )
         elif self.cluster_nodes == 2 or self.cluster_nodes == 3:
-            data = """mon pg warn min per osd = 8
-osd pool default size = 2
-"""
+            data = (
+                   "mon pg warn min per osd = 8\n"
+                   "osd pool default size = 2\n"
+                   )
         if data:
             self.log.info(info_msg)
             sudo_append_to_file(
@@ -133,6 +147,16 @@ osd pool default size = 2
                 global_conf,
                 data,
                 )
+
+    def _ceph_health_test(self):
+        self.master_remote.run(args=[
+            'sudo',
+            'salt-call',
+            'wait.until',
+            run.Raw('status=HEALTH_OK'),
+            'timeout=900',
+            'check=1',
+            ])
 
     def _copy_health_ok(self):
         """
@@ -527,6 +551,9 @@ role-{role_type}/cluster/{remote}.sls
         elif directive == "stage2":
             config = cmd_dict['stage2']
             target = self._run_stage_2
+        elif directive == "stage3":
+            config = cmd_dict['stage3']
+            target = self._run_stage_3
         else:
             raise ConfigError(
                 "deepsea_deploy: unknown directive ->{}<- in command dict"
@@ -536,8 +563,8 @@ role-{role_type}/cluster/{remote}.sls
     def _run_command_str(self, cmd):
         if cmd.startswith('health-ok.sh'):
             cmd = "health-ok/" + cmd
-        if self.dev_env:
-            cmd = "DEV_ENV=true " + cmd
+            if self.dev_env:
+                cmd = "DEV_ENV=true " + cmd
         self.log.info("deepsea_deploy: WWWW: running command ->{}<-"
                       .format(cmd))
         self.master_remote.run(args=[
@@ -572,8 +599,8 @@ role-{role_type}/cluster/{remote}.sls
                     ).format(stage_num))
             else:
                 self._run_command_str((
-                    'timeout 60m salt-run --no-color '
-                    'state.orch ceph.stage.{}'
+                    'timeout 60m salt-run '
+                    '--no-color state.orch ceph.stage.{}'
                     ).format(stage_num))
         except CommandFailedError:
             self.log.error(
@@ -621,6 +648,16 @@ role-{role_type}/cluster/{remote}.sls
         self._ceph_conf_dashboard()
         self._dump_global_conf()
         self._dump_mon_conf()
+
+    def _run_stage_3(self, config):
+        """
+        Run Stage 3
+        """
+        if not config:
+            config = {}
+        self._run_stage(3)
+        self._ceph_cluster_status()
+        self._ceph_health_test()
 
     def _salt_api_test(self):
         write_file(self.master_remote, 'salt_api_test.sh', salt_api_test)
