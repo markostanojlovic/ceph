@@ -7,4 +7,5 @@ tasks:
         - stage0:
         - stage1:
         - stage2:
-        - 'health-ok.sh --teuthology --cli --start-stage=3'
+        - stage3:
+        - 'ceph -s'
