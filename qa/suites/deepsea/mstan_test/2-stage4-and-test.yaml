@@ -1,0 +1,12 @@
+tasks:
+        - deepsea.create_pools:
+                openstack: 
+        - deepsea.orch:
+                stage: 4
+        - exec:
+                client.salt_master:
+                        - 'ceph -s'
+        - cephfs_test_runner:
+                fail_on_skip: false
+                modules:
+                        - tasks.mgr.test_dashboard
